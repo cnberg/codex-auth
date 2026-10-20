@@ -40,7 +40,14 @@ codex-auth switch <query> --json
 
 ## Query Switch
 
-`codex-auth switch <query>` resolves the target from stored local data and does not run remote refresh.
+`codex-auth switch <query>` resolves the target from stored local data. Before
+activation, this fork refreshes the selected OAuth credential when it is stale.
+This can contact the token endpoint; it does not fetch remote usage to resolve
+the query. Query mode has no `--skip-api` option.
+
+A failed refresh, uncertain token request, or credential storage failure blocks
+activation. Use user-controlled reauthentication when login is required; an
+uncertain request is not retried automatically.
 
 Selectors can match:
 

@@ -41,8 +41,15 @@ They use the same private permissions as credentials and may contain a successfu
 token response. Treat them as credentials. Keep the state until recovery or
 user reauthentication; removing an ambiguous state permits token reuse.
 
-The per-account lock coordinates this tool's refresh callers. Unmodified native
-Codex processes do not acquire that lock. A native credential observed to have
+The per-account lock coordinates this tool's refresh callers. A shared credential
+publication lock also covers native-to-snapshot synchronization, activation,
+credential import, and login publication. Activation recovers pending responses
+under the account lock, including when API calls are skipped; uncertain state
+blocks activation. User login/import publication waits for that account's
+in-flight refresh before replacing credentials. Token requests for different accounts remain parallel; only
+publication is serialized. Acquire the account refresh lock before the publication
+lock, never in the reverse order. Unmodified native Codex processes acquire
+neither lock. A native credential observed to have
 advanced during refresh is preserved, but this is not a guarantee against an
 independent native refresh already in flight. Continue to restart clients after
 switching, as upstream requires. Keep this limitation in scope when changing

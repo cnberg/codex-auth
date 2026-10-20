@@ -7,7 +7,6 @@ const targets = @import("targets.zig");
 const workflow_env = @import("env.zig");
 const live_types = @import("live_types.zig");
 const live_display = @import("live_display.zig");
-const oauth_refresh = @import("../auth/oauth_refresh.zig");
 
 const ForegroundUsageRefreshTarget = targets.ForegroundUsageRefreshTarget;
 const SwitchLiveRefreshPolicy = live_types.SwitchLiveRefreshPolicy;
@@ -402,13 +401,7 @@ pub fn switchLiveRuntimeApplySelection(
     }
 
     if (runtime.api_mode != .skip_api) {
-        const is_active = if (reg.active_account_key) |key| std.mem.eql(u8, key, account_key) else false;
-        _ = oauth_refresh.refreshAccount(allocator, runtime.codex_home, account_key, is_active, false) catch |err| switch (err) {
-            error.RefreshLoginRequired, error.RefreshProtocolFailure => return error.LoginRequired,
-            error.MissingRefreshToken, error.MissingTokens => {},
-            error.RefreshTransient => std.log.warn("OAuth refresh was unavailable; switching anyway so Codex can recover the login: {s}", .{@errorName(err)}),
-            else => return err,
-        };
+        try @import("refresh_target.zig").refreshForSwitch(allocator, runtime.codex_home, account_key);
     }
     try registry.activateAccountByKey(allocator, runtime.codex_home, &reg, account_key);
     try registry.saveRegistry(allocator, runtime.codex_home, &reg);

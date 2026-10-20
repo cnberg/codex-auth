@@ -5,6 +5,7 @@ const http = @import("../api/http.zig");
 const registry = @import("../registry/root.zig");
 const sensitive_file = @import("../core/sensitive_file.zig");
 const timestamps = @import("../core/timestamp.zig");
+const credential_lock = @import("../core/credential_lock.zig");
 
 pub const token_endpoint = "https://auth.openai.com/oauth/token";
 pub const client_id = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -100,12 +101,11 @@ fn fallbackStale(obj: std.json.ObjectMap, now_seconds: i64) bool {
     return now_seconds - refreshed >= fallback_max_age_seconds;
 }
 
-pub fn refreshAccount(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8, active: bool, force: bool) !Outcome {
+pub fn refreshAccount(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8, force: bool) !Outcome {
     return refreshAccountWith(
         allocator,
         codex_home,
         account_key,
-        active,
         force,
         std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         http.runPostJsonCommand,
@@ -117,24 +117,17 @@ pub fn refreshAccountWith(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     account_key: []const u8,
-    active: bool,
     force: bool,
     now: i64,
     requester: anytype,
     locker: anytype,
 ) !Outcome {
     try registry.ensureAccountsDir(allocator, codex_home);
-    const file_key = try registry.accountFileKey(allocator, account_key);
-    defer allocator.free(file_key);
-    const lock_name = try std.fmt.allocPrint(allocator, "{s}.refresh.lock", .{file_key});
-    defer allocator.free(lock_name);
-    const lock_path = try std.fs.path.join(allocator, &.{ codex_home, "accounts", lock_name });
-    defer allocator.free(lock_path);
     const snapshot_path = try registry.accountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(snapshot_path);
     const observed = try readFile(allocator, snapshot_path);
     defer allocator.free(observed);
-    var lock_file = try std.Io.Dir.cwd().createFile(app_runtime.io(), lock_path, .{ .truncate = false, .permissions = sensitive_file.permissions });
+    var lock_file = try openAccountLock(allocator, codex_home, account_key);
     defer lock_file.close(app_runtime.io());
     locker(lock_file) catch |err| switch (err) {
         error.FileLocksUnsupported => return error.RefreshLockUnsupported,
@@ -166,7 +159,9 @@ pub fn refreshAccountWith(
     saveState(allocator, state_path, .{ .source_refresh_hash = &source_hash, .auth = updated }) catch {
         storage_failed = true;
     };
-    if (active and try activeAuthMatchesAccount(allocator, codex_home, account_key)) {
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
+    if (try activeAuthMatchesAccount(allocator, codex_home, account_key)) {
         const active_path = try registry.activeAuthPath(allocator, codex_home);
         defer allocator.free(active_path);
         // Preserve a newer credential written by native Codex during the POST.
@@ -195,14 +190,8 @@ pub fn recoverPendingAccounts(allocator: std.mem.Allocator, codex_home: []const 
             error.FileNotFound => continue,
             else => return err,
         };
-        const file_key = try registry.accountFileKey(allocator, account.account_key);
-        defer allocator.free(file_key);
-        const lock_path = try std.fmt.allocPrint(allocator, "{s}/accounts/{s}.refresh.lock", .{ codex_home, file_key });
-        defer allocator.free(lock_path);
-        var lock_file = try std.Io.Dir.cwd().createFile(app_runtime.io(), lock_path, .{ .truncate = false, .permissions = sensitive_file.permissions });
-        defer lock_file.close(app_runtime.io());
-        try lockExclusive(lock_file);
-        defer lock_file.unlock(app_runtime.io());
+        const lock_file = try acquireAccountLock(allocator, codex_home, account.account_key);
+        defer credential_lock.release(lock_file);
         const snapshot_path = try registry.accountAuthPath(allocator, codex_home, account.account_key);
         defer allocator.free(snapshot_path);
         // In-flight/uncertain requests have no response to recover. The refresh
@@ -212,6 +201,40 @@ pub fn recoverPendingAccounts(allocator: std.mem.Allocator, codex_home: []const 
             else => return err,
         };
     }
+}
+
+fn openAccountLock(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) !std.Io.File {
+    try registry.ensureAccountsDir(allocator, codex_home);
+    const key = try registry.accountFileKey(allocator, account_key);
+    defer allocator.free(key);
+    const name = try std.fmt.allocPrint(allocator, "{s}.refresh.lock", .{key});
+    defer allocator.free(name);
+    const path = try std.fs.path.join(allocator, &.{ codex_home, "accounts", name });
+    defer allocator.free(path);
+    return std.Io.Dir.cwd().createFile(app_runtime.io(), path, .{ .truncate = false, .permissions = sensitive_file.permissions });
+}
+
+// Import/login may replace an uncertain credential, but must wait for any
+// in-flight refresh before publishing that user-supplied replacement.
+pub fn acquireAccountLock(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) !std.Io.File {
+    var file = try openAccountLock(allocator, codex_home, account_key);
+    errdefer file.close(app_runtime.io());
+    lockExclusive(file) catch |err| switch (err) {
+        error.FileLocksUnsupported => return error.RefreshLockUnsupported,
+        else => return err,
+    };
+    return file;
+}
+
+pub fn acquireActivationLock(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) !std.Io.File {
+    const file = try acquireAccountLock(allocator, codex_home, account_key);
+    errdefer credential_lock.release(file);
+    const snapshot = try registry.accountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(snapshot);
+    const state = try refreshStatePath(allocator, codex_home, account_key);
+    defer allocator.free(state);
+    _ = try recoverState(allocator, codex_home, account_key, snapshot, state);
+    return file;
 }
 
 fn refreshStatePath(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) ![]u8 {
@@ -255,6 +278,8 @@ fn recoverState(allocator: std.mem.Allocator, codex_home: []const u8, account_ke
         else => return error.RefreshPersistence,
     };
     defer allocator.free(data);
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
     var parsed = std.json.parseFromSlice(RefreshState, allocator, data, .{}) catch return error.RefreshPersistence;
     defer parsed.deinit();
     if (parsed.value.source_refresh_hash.len != 64) return error.RefreshPersistence;

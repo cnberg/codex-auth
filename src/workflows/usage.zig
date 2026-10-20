@@ -373,8 +373,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 if (!std.mem.eql(u8, account.account_key, key)) continue;
             }
             if (skipsChatGptUsage(&account)) continue;
-            const is_active = if (reg.active_account_key) |key| std.mem.eql(u8, key, account.account_key) else false;
-            may_force_refresh[idx] = prepareUsageAuth(allocator, codex_home, account.account_key, is_active) catch |err| {
+            may_force_refresh[idx] = prepareUsageAuth(allocator, codex_home, account.account_key) catch |err| {
                 worker_results[idx] = .{ .requested = true, .error_name = @errorName(err) };
                 continue;
             };
@@ -416,9 +415,8 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 std.mem.eql(u8, batch_result.error_code.?.text(), "token_expired"))
             {
                 const account = &reg.accounts.items[idx];
-                const is_active = if (reg.active_account_key) |key| std.mem.eql(u8, key, account.account_key) else false;
                 const refreshed: ?oauth_refresh.Outcome = refresh_attempt: {
-                    break :refresh_attempt oauth_refresh.refreshAccount(allocator, codex_home, account.account_key, is_active, true) catch |err| switch (err) {
+                    break :refresh_attempt oauth_refresh.refreshAccount(allocator, codex_home, account.account_key, true) catch |err| switch (err) {
                         error.OutOfMemory => return err,
                         else => {
                             batch_result.error_name = @errorName(err);
@@ -671,8 +669,8 @@ fn runForegroundUsageRefreshWorkersSerially(
 
 // Only a fresh local snapshot allows a later forced refresh. An attempted or
 // reused refresh has already spent this invocation's single token request.
-fn prepareUsageAuth(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8, active: bool) !bool {
-    const outcome = oauth_refresh.refreshAccount(allocator, codex_home, account_key, active, false) catch |err| switch (err) {
+fn prepareUsageAuth(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) !bool {
+    const outcome = oauth_refresh.refreshAccount(allocator, codex_home, account_key, false) catch |err| switch (err) {
         error.MissingRefreshToken, error.MissingTokens, error.FileNotFound, error.RefreshTransient, error.TimedOut, error.RequestFailed, error.CurlRequired => return false,
         else => return err,
     };
@@ -704,8 +702,7 @@ fn foregroundUsageRefreshWorker(
     };
 
     const account_key = reg.accounts.items[account_idx].account_key;
-    const is_active = if (reg.active_account_key) |key| std.mem.eql(u8, key, account_key) else false;
-    const may_force_refresh = prepareUsageAuth(arena, codex_home, account_key, is_active) catch |err| {
+    const may_force_refresh = prepareUsageAuth(arena, codex_home, account_key) catch |err| {
         results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
         return;
     };
@@ -717,7 +714,7 @@ fn foregroundUsageRefreshWorker(
     if (may_force_refresh and fetch_result.status_code == 401 and fetch_result.error_code != null and
         std.mem.eql(u8, fetch_result.error_code.?.text(), "token_expired"))
     {
-        _ = oauth_refresh.refreshAccount(arena, codex_home, account_key, is_active, true) catch |err| {
+        _ = oauth_refresh.refreshAccount(arena, codex_home, account_key, true) catch |err| {
             results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
             return;
         };

@@ -35,7 +35,6 @@ pub fn main(init: std.process.Init) !void {
         args[1],
         "acct",
         false,
-        false,
         1,
         request,
         lockExclusive,

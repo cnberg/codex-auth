@@ -122,7 +122,6 @@ test "OAuth refresh response requires a nonempty access token and validates opti
 }
 
 test "sensitive atomic writes replace content and enforce POSIX owner-only permissions" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -132,8 +131,10 @@ test "sensitive atomic writes replace content and enforce POSIX owner-only permi
     defer allocator.free(path);
     try sensitive_file.writeAtomic(path, "first");
     try sensitive_file.writeAtomic(path, "second");
-    const stat = try std.Io.Dir.cwd().statFile(app_runtime.io(), path, .{});
-    try std.testing.expectEqual(@as(std.posix.mode_t, 0o600), stat.permissions.toMode() & 0o777);
+    if (builtin.os.tag != .windows) {
+        const stat = try std.Io.Dir.cwd().statFile(app_runtime.io(), path, .{});
+        try std.testing.expectEqual(@as(std.posix.mode_t, 0o600), stat.permissions.toMode() & 0o777);
+    }
     const file = try std.Io.Dir.cwd().openFile(app_runtime.io(), path, .{});
     defer file.close(app_runtime.io());
     var buffer: [16]u8 = undefined;
@@ -161,7 +162,6 @@ test "concurrent refresh callers collapse refresh token rotation to one request"
                 home,
                 "acct",
                 false,
-                false,
                 1,
                 ConcurrentRequester.request,
                 lockExclusive,
@@ -185,7 +185,7 @@ test "unsupported file locking fails closed before token transport" {
     try registryTestSnapshot(allocator, codex_home, "acct");
     try std.testing.expectError(
         error.RefreshLockUnsupported,
-        refresh.refreshAccountWith(allocator, codex_home, "acct", false, true, 1, unexpectedRequest, unsupportedLock),
+        refresh.refreshAccountWith(allocator, codex_home, "acct", true, 1, unexpectedRequest, unsupportedLock),
     );
 }
 
@@ -197,8 +197,10 @@ test "ambiguous refresh results survive a new caller without reusing the refresh
     defer allocator.free(home);
     try registryTestSnapshot(allocator, home, "acct");
     TimedOutRequester.calls = 0;
-    try std.testing.expectError(error.RefreshUncertain, refresh.refreshAccountWith(allocator, home, "acct", false, false, 1, TimedOutRequester.request, lockExclusive));
-    try std.testing.expectError(error.RefreshUncertain, refresh.refreshAccountWith(allocator, home, "acct", false, true, 1, TimedOutRequester.request, lockExclusive));
+    try std.testing.expectError(error.RefreshUncertain, refresh.refreshAccountWith(allocator, home, "acct", false, 1, TimedOutRequester.request, lockExclusive));
+    try std.testing.expectError(error.RefreshUncertain, refresh.refreshAccountWith(allocator, home, "acct", true, 1, TimedOutRequester.request, lockExclusive));
+    // Even a local-only activation must not restore a possibly spent token.
+    try std.testing.expectError(error.RefreshUncertain, refresh.acquireActivationLock(allocator, home, "acct"));
     try std.testing.expectEqual(@as(usize, 1), TimedOutRequester.calls);
 }
 
@@ -222,7 +224,7 @@ test "a journaled refresh response is recovered without another token request" {
         .auth = recovered,
     }, .{}, &out.writer);
     try sensitive_file.writeAtomic(state_path, out.written());
-    try std.testing.expectEqual(refresh.Outcome.reused, try refresh.refreshAccountWith(allocator, home, "acct", false, true, 1, unexpectedRequest, lockExclusive));
+    try std.testing.expectEqual(refresh.Outcome.reused, try refresh.refreshAccountWith(allocator, home, "acct", true, 1, unexpectedRequest, lockExclusive));
     const snapshot_path = try registry.accountAuthPath(allocator, home, "acct");
     defer allocator.free(snapshot_path);
     const file = try std.Io.Dir.cwd().openFile(app_runtime.io(), snapshot_path, .{});

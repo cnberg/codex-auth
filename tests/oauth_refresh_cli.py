@@ -10,6 +10,9 @@ import tempfile
 import time
 import unittest
 
+if os.name != "nt":
+    import fcntl
+
 BINARY = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 else Path("zig-out/bin/codex-auth").resolve()
 ACCOUNT_ID = "11111111-1111-4111-8111-111111111111"
 USER_ID = "user-refresh-regression"
@@ -40,6 +43,11 @@ with (root/'requests.jsonl').open('a') as output:
  output.write(json.dumps({'kind':kind,'initial':initial})+'\n')
 def reply(value,status=200): print(json.dumps(value)+'\n'+str(status),end='')
 if kind=='oauth':
+ if mode=='server-failure':reply({},503);sys.exit(0)
+ if mode=='held-response':
+  deadline=time.monotonic()+5
+  while not (root/'release-response').exists() and time.monotonic()<deadline:time.sleep(0.01)
+  if not (root/'release-response').exists():sys.exit(28)
  if mode in ('timeout','forced-timeout'):sys.exit(28)
  if mode=='concurrent':time.sleep(0.3)
  if mode=='persistence':os.chmod(Path(os.environ['CODEX_HOME'])/'accounts',0o500)
@@ -114,6 +122,101 @@ class RefreshCliTests(unittest.TestCase):
         return [event for line in self.log.read_text().splitlines()
                 if (event := json.loads(line))["kind"] == kind]
 
+    def start_cli(self, *args):
+        process = subprocess.Popen([str(BINARY), *args], cwd=self.root, env=self.env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        def stop():
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        self.addCleanup(stop)
+        return process
+
+    def wait_until(self, predicate):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.01)
+        self.fail("timed out waiting for synthetic operation")
+
+    def test_sync_waits_for_publication_and_reads_the_new_native_auth(self):
+        self.seed(fresh=True)
+        with (self.accounts / ".credentials.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            process = self.start_cli("list", "--skip-api", "--json")
+            time.sleep(0.2)
+            self.assertIsNone(process.poll(), "sync bypassed the credential publication lock")
+            updated = dict(self.auth, tokens=dict(self.auth["tokens"], refresh_token="synthetic-rotated"))
+            (self.home / "auth.json").write_text(json.dumps(updated))
+            self.snapshot.write_text(json.dumps(updated))
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        stdout, stderr = process.communicate(timeout=10)
+        self.assertEqual(process.returncode, 0, stderr)
+        self.assertEqual(json.loads(self.snapshot.read_text())["tokens"]["refresh_token"], "synthetic-rotated")
+        self.assertEqual(len(self.events("oauth")), 0)
+
+    def test_interrupted_publish_recovers_the_journal_without_another_post(self):
+        self.env["REFRESH_TEST_MODE"] = "held-response"
+        process = self.start_cli("list", "--json")
+        self.wait_until(lambda: len(self.events("oauth")) == 1)
+        with (self.accounts / ".credentials.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            (self.root / "release-response").touch()
+            def response_journaled():
+                states = list(self.accounts.glob("*.refresh-state.json"))
+                return states and json.loads(states[0].read_text()).get("auth") is not None
+            self.wait_until(response_journaled)
+            process.kill()
+            process.communicate(timeout=10)
+            self.assertEqual(json.loads(self.snapshot.read_text())["tokens"]["refresh_token"], "synthetic-old")
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        self.env["REFRESH_TEST_MODE"] = "success"
+        recovered = self.run_cli("list", "--json")
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        for path in [self.snapshot, self.home / "auth.json"]:
+            self.assertEqual(json.loads(path.read_text())["tokens"]["refresh_token"], "synthetic-rotated")
+        self.assertEqual(len(self.events("oauth")), 1)
+
+    def test_account_activated_during_refresh_receives_the_new_credential(self):
+        (self.home / "auth.json").unlink()
+        registry_path = self.accounts / "registry.json"
+        registry = json.loads(registry_path.read_text())
+        registry["active_account_key"] = None
+        registry_path.write_text(json.dumps(registry))
+        self.env["REFRESH_TEST_MODE"] = "held-response"
+        process = self.start_cli("list", "--json")
+        self.wait_until(lambda: len(self.events("oauth")) == 1)
+        (self.home / "auth.json").write_text(json.dumps(self.auth))
+        (self.root / "release-response").touch()
+        stdout, stderr = process.communicate(timeout=10)
+        self.assertEqual(process.returncode, 0, stderr)
+        for path in [self.snapshot, self.home / "auth.json"]:
+            self.assertEqual(json.loads(path.read_text())["tokens"]["refresh_token"], "synthetic-rotated")
+        self.assertEqual(len(self.events("oauth")), 1)
+
+    def test_new_user_import_waits_for_refresh_and_is_preserved(self):
+        (self.home / "auth.json").unlink()
+        registry_path = self.accounts / "registry.json"
+        registry = json.loads(registry_path.read_text())
+        registry["active_account_key"] = None
+        registry_path.write_text(json.dumps(registry))
+        self.env["REFRESH_TEST_MODE"] = "held-response"
+        refreshing = self.start_cli("list", "--json")
+        self.wait_until(lambda: len(self.events("oauth")) == 1)
+        replacement = dict(self.auth, tokens=dict(self.auth["tokens"], refresh_token="synthetic-user-login"))
+        source = self.root / "user-login.json"
+        source.write_text(json.dumps(replacement))
+        importing = self.start_cli("import", str(source))
+        time.sleep(0.2)
+        self.assertIsNone(importing.poll(), "import bypassed the in-flight account refresh")
+        (self.root / "release-response").touch()
+        for process in [refreshing, importing]:
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, stderr)
+        self.assertEqual(json.loads(self.snapshot.read_text())["tokens"]["refresh_token"], "synthetic-user-login")
+        self.assertEqual(len(self.events("oauth")), 1)
+
     def test_successful_refresh_rotates_tokens_with_three_root_keys(self):
         result = self.run_cli("list", "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -129,6 +232,14 @@ class RefreshCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             refresh = json.loads(result.stdout)["accounts"][0]["usage"]["refresh"]
             self.assertEqual(refresh["error_code"], "RefreshUncertain")
+        self.assertEqual(len(self.events("oauth")), 1)
+
+    def test_server_failure_blocks_switch_without_activating_old_auth(self):
+        self.env["REFRESH_TEST_MODE"] = "server-failure"
+        before = (self.home / "auth.json").read_text()
+        result = self.run_cli("switch", EMAIL, "--json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.home / "auth.json").read_text(), before)
         self.assertEqual(len(self.events("oauth")), 1)
 
     def test_replay_transport_failure_remains_an_error(self):
