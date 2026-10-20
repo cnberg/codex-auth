@@ -9,6 +9,7 @@ permissions:
 jobs:
   release-assets:
     name: Build Preview Packages (${{ matrix.id }})
+    if: ${{ github.repository == 'Loongphy/codex-auth' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
