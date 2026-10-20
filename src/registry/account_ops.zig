@@ -4,6 +4,7 @@ const account_api = @import("../api/account.zig");
 const me_api = @import("../api/me.zig");
 const common = @import("common.zig");
 const clean = @import("clean.zig");
+const credential_lock = @import("../core/credential_lock.zig");
 
 const PlanType = common.PlanType;
 const RateLimitWindow = common.RateLimitWindow;
@@ -120,6 +121,9 @@ pub fn updateUsage(allocator: std.mem.Allocator, reg: *Registry, account_key: []
 }
 
 pub fn syncActiveAccountFromAuthWithImporter(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry, auto_importer: anytype) !bool {
+    try @import("../auth/oauth_refresh.zig").recoverPendingAccounts(allocator, codex_home, reg);
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
     if (reg.accounts.items.len == 0) {
         return try auto_importer(allocator, codex_home, reg);
     }
@@ -527,6 +531,10 @@ pub fn activateAccountByKey(
     reg: *Registry,
     account_key: []const u8,
 ) !void {
+    const account_lock = try @import("../auth/oauth_refresh.zig").acquireActivationLock(allocator, codex_home, account_key);
+    defer credential_lock.release(account_lock);
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
     _ = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
     const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(src);
@@ -545,6 +553,10 @@ pub fn replaceActiveAuthWithAccountByKey(
     reg: *Registry,
     account_key: []const u8,
 ) !void {
+    const account_lock = try @import("../auth/oauth_refresh.zig").acquireActivationLock(allocator, codex_home, account_key);
+    defer credential_lock.release(account_lock);
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
     _ = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
     const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(src);
@@ -563,6 +575,10 @@ pub fn replaceActiveAuthWithAccountByKeyPreservingPrevious(
     reg: *Registry,
     account_key: []const u8,
 ) !void {
+    const account_lock = try @import("../auth/oauth_refresh.zig").acquireActivationLock(allocator, codex_home, account_key);
+    defer credential_lock.release(account_lock);
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
     _ = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
     const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(src);

@@ -59,3 +59,9 @@ jobs:
         run: |
           zig version
           zig build test -j1
+
+      - name: OAuth refresh CLI regressions
+        if: ${{ matrix.os != 'windows-latest' }}
+        run: |
+          zig build
+          python3 tests/oauth_refresh_cli.py zig-out/bin/codex-auth

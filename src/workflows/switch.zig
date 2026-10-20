@@ -5,6 +5,7 @@ const live_flow = @import("live.zig");
 const preflight = @import("preflight.zig");
 const query_mod = @import("query.zig");
 const results = @import("results.zig");
+const refreshSwitchTarget = @import("refresh_target.zig").refreshForSwitch;
 
 const ensureLiveTty = preflight.ensureLiveTty;
 const resolveSwitchQueryLocally = query_mod.resolveSwitchQueryLocally;
@@ -56,6 +57,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
                 return err;
             };
             if (selected_account_key == null) return;
+            if (opts.api_mode != .skip_api) try refreshSwitchTarget(allocator, codex_home, selected_account_key.?);
             try registry.activateAccountByKey(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
             try registry.saveRegistry(allocator, codex_home, &loaded.display.reg);
             try cli.output.printSwitchedAccount(allocator, &loaded.display.reg, selected_account_key.?);
@@ -147,6 +149,7 @@ fn handleSwitchQuery(
         },
     };
     if (selected_account_key == null) return;
+    try refreshSwitchTarget(allocator, codex_home, selected_account_key.?);
     try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
     try registry.saveRegistry(allocator, codex_home, &reg);
     try cli.output.printSwitchedAccount(allocator, &reg, selected_account_key.?);
@@ -187,6 +190,7 @@ fn handleSwitchPrevious(
         }
     }
 
+    try refreshSwitchTarget(allocator, codex_home, previous_account_key);
     try registry.activateAccountByKey(allocator, codex_home, &reg, previous_account_key);
     try registry.saveRegistry(allocator, codex_home, &reg);
     try cli.output.printSwitchedAccount(allocator, &reg, previous_account_key);
@@ -224,6 +228,7 @@ fn handleSwitchQueryJson(
         },
     };
 
+    refreshSwitchTarget(allocator, codex_home, selected_account_key) catch |err| return printJsonMutationError(err);
     registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key) catch |err| return printJsonMutationError(err);
     registry.saveRegistry(allocator, codex_home, &reg) catch |err| return printJsonMutationError(err);
 

@@ -5,6 +5,8 @@ const auth = @import("../auth/auth.zig");
 const me_api = @import("../api/me.zig");
 const account_names = @import("account_names.zig");
 const app_runtime = @import("../core/runtime.zig");
+const credential_lock = @import("../core/credential_lock.zig");
+const oauth_refresh = @import("../auth/oauth_refresh.zig");
 
 const defaultAccountFetcher = account_names.defaultAccountFetcher;
 const refreshAccountNamesAfterLogin = account_names.refreshAccountNamesAfterLogin;
@@ -14,6 +16,19 @@ fn loginScratchCodexHomeAlloc(allocator: std.mem.Allocator, codex_home: []const 
     const name = try std.fmt.allocPrint(allocator, "login-{d}", .{stamp});
     defer allocator.free(name);
     return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", name });
+}
+
+fn publishLoginAuth(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8, login_auth_path: []const u8) !void {
+    const account_lock = try oauth_refresh.acquireAccountLock(allocator, codex_home, account_key);
+    defer credential_lock.release(account_lock);
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
+    const active = try registry.activeAuthPath(allocator, codex_home);
+    defer allocator.free(active);
+    const snapshot = try registry.accountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(snapshot);
+    try registry.copyManagedFile(login_auth_path, active);
+    try registry.copyManagedFile(login_auth_path, snapshot);
 }
 
 pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.LoginOptions) !void {
@@ -33,11 +48,7 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     const login_auth_path = try registry.activeAuthPath(allocator, login_codex_home);
     defer allocator.free(login_auth_path);
 
-    const auth_path = try registry.activeAuthPath(allocator, codex_home);
-    defer allocator.free(auth_path);
-    try registry.copyManagedFile(login_auth_path, auth_path);
-
-    const info = try auth.parseAuthInfo(allocator, auth_path);
+    const info = try auth.parseAuthInfo(allocator, login_auth_path);
     defer info.deinit(allocator);
 
     if (info.auth_mode == .apikey) {
@@ -47,11 +58,7 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
 
         const record_key = try registry.apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
         defer allocator.free(record_key);
-        const dest = try registry.accountAuthPath(allocator, codex_home, record_key);
-        defer allocator.free(dest);
-
-        try registry.ensureAccountsDir(allocator, codex_home);
-        try registry.copyManagedFile(auth_path, dest);
+        try publishLoginAuth(allocator, codex_home, record_key, login_auth_path);
 
         const record = try registry.accountFromApiKeyMe(allocator, "", &info, &me);
         try registry.upsertAccount(allocator, &reg, record);
@@ -63,11 +70,7 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     const email = info.email orelse return error.MissingEmail;
     _ = email;
     const record_key = info.record_key orelse return error.MissingChatgptUserId;
-    const dest = try registry.accountAuthPath(allocator, codex_home, record_key);
-    defer allocator.free(dest);
-
-    try registry.ensureAccountsDir(allocator, codex_home);
-    try registry.copyManagedFile(auth_path, dest);
+    try publishLoginAuth(allocator, codex_home, record_key, login_auth_path);
 
     const record = try registry.accountFromAuth(allocator, "", &info);
     try registry.upsertAccount(allocator, &reg, record);

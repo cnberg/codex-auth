@@ -400,6 +400,9 @@ pub fn switchLiveRuntimeApplySelection(
         try registry.saveRegistry(allocator, runtime.codex_home, &reg);
     }
 
+    if (runtime.api_mode != .skip_api) {
+        try @import("refresh_target.zig").refreshForSwitch(allocator, runtime.codex_home, account_key);
+    }
     try registry.activateAccountByKey(allocator, runtime.codex_home, &reg, account_key);
     try registry.saveRegistry(allocator, runtime.codex_home, &reg);
 

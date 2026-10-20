@@ -6,6 +6,7 @@ const common = @import("common.zig");
 const clean = @import("clean.zig");
 const parse = @import("parse.zig");
 const account_ops = @import("account_ops.zig");
+const credential_lock = @import("../core/credential_lock.zig");
 
 const PlanType = common.PlanType;
 const AccountRecord = common.AccountRecord;
@@ -325,6 +326,10 @@ fn importConvertedAuthInfo(
 
     _ = info.email orelse return error.MissingEmail;
     const record_key = info.record_key orelse return error.MissingChatgptUserId;
+    const account_lock = try @import("../auth/oauth_refresh.zig").acquireAccountLock(allocator, codex_home, record_key);
+    defer credential_lock.release(account_lock);
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
 
     const alias = explicit_alias orelse "";
     const existed = findAccountIndexByAccountKey(reg, record_key) != null;
@@ -378,6 +383,10 @@ fn importAuthInfo(
 
     _ = info.email orelse return error.MissingEmail;
     const record_key = info.record_key orelse return error.MissingChatgptUserId;
+    const account_lock = try @import("../auth/oauth_refresh.zig").acquireAccountLock(allocator, codex_home, record_key);
+    defer credential_lock.release(account_lock);
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
 
     const alias = explicit_alias orelse "";
     const existed = findAccountIndexByAccountKey(reg, record_key) != null;
@@ -401,6 +410,8 @@ fn importApiKeyAuthData(
     info: *const @import("../auth/auth.zig").AuthInfo,
     auth_data: []const u8,
 ) !ImportOutcome {
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
     const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
     var me = try me_api.fetchMeForApiKey(allocator, api_key);
     defer me.deinit(allocator);
@@ -429,6 +440,8 @@ fn importApiKeyAuthFile(
     explicit_alias: ?[]const u8,
     info: *const @import("../auth/auth.zig").AuthInfo,
 ) !ImportOutcome {
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
     const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
     var me = try me_api.fetchMeForApiKey(allocator, api_key);
     defer me.deinit(allocator);
@@ -564,6 +577,8 @@ fn syncCurrentAuthBestEffort(
     codex_home: []const u8,
     reg: *Registry,
 ) !?ImportOutcome {
+    const publish_lock = try credential_lock.acquire(allocator, codex_home);
+    defer credential_lock.release(publish_lock);
     const auth_path = try activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 

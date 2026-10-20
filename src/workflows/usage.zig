@@ -2,6 +2,7 @@ const std = @import("std");
 const registry = @import("../registry/root.zig");
 const sessions = @import("../session.zig");
 const usage_api = @import("../api/usage.zig");
+const oauth_refresh = @import("../auth/oauth_refresh.zig");
 
 const foreground_usage_refresh_concurrency: usize = 5;
 pub const max_usage_override_display_width: usize = 25;
@@ -354,6 +355,10 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
     }
     for (worker_results) |*worker_result| worker_result.* = .{};
 
+    const may_force_refresh = try allocator.alloc(bool, reg.accounts.items.len);
+    defer allocator.free(may_force_refresh);
+    @memset(may_force_refresh, false);
+
     if (batch_fetcher) |fetch_batch| batch_fetch: {
         var auth_path_arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
         defer auth_path_arena_state.deinit();
@@ -368,6 +373,10 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 if (!std.mem.eql(u8, account.account_key, key)) continue;
             }
             if (skipsChatGptUsage(&account)) continue;
+            may_force_refresh[idx] = prepareUsageAuth(allocator, codex_home, account.account_key) catch |err| {
+                worker_results[idx] = .{ .requested = true, .error_name = @errorName(err) };
+                continue;
+            };
             try fetch_account_indices.append(auth_path_arena, idx);
         }
         if (fetch_account_indices.items.len == 0) break :batch_fetch;
@@ -402,6 +411,33 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
 
         for (batch_results, 0..) |*batch_result, fetch_idx| {
             const idx = fetch_account_indices.items[fetch_idx];
+            if (may_force_refresh[idx] and batch_result.status_code == 401 and batch_result.error_code != null and
+                std.mem.eql(u8, batch_result.error_code.?.text(), "token_expired"))
+            {
+                const account = &reg.accounts.items[idx];
+                const refreshed: ?oauth_refresh.Outcome = refresh_attempt: {
+                    break :refresh_attempt oauth_refresh.refreshAccount(allocator, codex_home, account.account_key, true) catch |err| switch (err) {
+                        error.OutOfMemory => return err,
+                        else => {
+                            batch_result.error_name = @errorName(err);
+                            batch_result.status_code = null;
+                            batch_result.error_code = null;
+                            break :refresh_attempt null;
+                        },
+                    };
+                };
+                if (refreshed != null) {
+                    const replay = usage_fetcher(allocator, auth_paths[fetch_idx]) catch |err| {
+                        worker_results[idx] = .{ .requested = true, .error_name = @errorName(err) };
+                        continue;
+                    };
+                    batch_result.snapshot = replay.snapshot;
+                    batch_result.status_code = replay.status_code;
+                    batch_result.error_code = replay.error_code;
+                    batch_result.missing_auth = replay.missing_auth;
+                    batch_result.error_name = null;
+                }
+            }
             worker_results[idx] = .{
                 .requested = true,
                 .status_code = batch_result.status_code,
@@ -631,6 +667,16 @@ fn runForegroundUsageRefreshWorkersSerially(
     }
 }
 
+// Only a fresh local snapshot allows a later forced refresh. An attempted or
+// reused refresh has already spent this invocation's single token request.
+fn prepareUsageAuth(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) !bool {
+    const outcome = oauth_refresh.refreshAccount(allocator, codex_home, account_key, false) catch |err| switch (err) {
+        error.MissingRefreshToken, error.MissingTokens, error.FileNotFound, error.RefreshTransient, error.TimedOut, error.RequestFailed, error.CurlRequired => return false,
+        else => return err,
+    };
+    return outcome == .fresh;
+}
+
 fn foregroundUsageRefreshWorker(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -655,10 +701,28 @@ fn foregroundUsageRefreshWorker(
         return;
     };
 
-    const fetch_result = usage_fetcher(arena, auth_path) catch |err| {
+    const account_key = reg.accounts.items[account_idx].account_key;
+    const may_force_refresh = prepareUsageAuth(arena, codex_home, account_key) catch |err| {
         results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
         return;
     };
+
+    var fetch_result = usage_fetcher(arena, auth_path) catch |err| {
+        results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
+        return;
+    };
+    if (may_force_refresh and fetch_result.status_code == 401 and fetch_result.error_code != null and
+        std.mem.eql(u8, fetch_result.error_code.?.text(), "token_expired"))
+    {
+        _ = oauth_refresh.refreshAccount(arena, codex_home, account_key, true) catch |err| {
+            results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
+            return;
+        };
+        fetch_result = usage_fetcher(arena, auth_path) catch |err| {
+            results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
+            return;
+        };
+    }
 
     var result: ForegroundUsageWorkerResult = .{
         .requested = true,

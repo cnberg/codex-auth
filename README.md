@@ -1,5 +1,8 @@
 # Codex Auth [![latest release](https://img.shields.io/github/v/release/Loongphy/codex-auth?sort=semver&label=latest)](https://github.com/Loongphy/codex-auth/releases/latest) [![latest pre-release](https://img.shields.io/github/v/release/Loongphy/codex-auth?include_prereleases&sort=semver&filter=*-*&label=pre-release)](https://github.com/Loongphy/codex-auth/releases)
 
+This is the `cnberg/codex-auth` maintenance fork. See the [maintenance guide](docs/fork-maintenance.md)
+for fork changes and upstream upgrades. The npm commands below install the upstream distribution.
+
 ![command list](https://github.com/user-attachments/assets/6c13a2d6-f9da-47ea-8ec8-0394fc072d40)
 
 `codex-auth` is a command-line tool for switching Codex accounts.

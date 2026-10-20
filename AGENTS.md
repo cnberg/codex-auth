@@ -2,6 +2,12 @@
 
 - All user-facing CLI output, prompts, help text, warnings, and error messages must be written in English only.
 
+# Fork Maintenance
+
+- This fork is maintained at `cnberg/codex-auth`; `Loongphy/codex-auth` is upstream.
+- Before syncing upstream, changing credential persistence, installing this fork, or releasing, read [docs/fork-maintenance.md](docs/fork-maintenance.md).
+- Validate authentication with synthetic credentials and an isolated `CODEX_HOME`. Real-account login, reauthentication, switching, credential import, and token refresh are performed by the user.
+
 # Validation
 
 After modifying any `.zig` file, always run `zig build run -- list` to verify the changes work correctly.

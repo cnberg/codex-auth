@@ -359,6 +359,7 @@ jobs:
             release-assets/*/*.zip
 
   publish-npm:
+    if: ${{ github.repository == 'Loongphy/codex-auth' }}
     name: Publish npm packages
     runs-on: ubuntu-latest
     needs: [build-test, release-assets]
