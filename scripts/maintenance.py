@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Maintain this fork and its local installation without accessing Codex credentials.
 
-The scheduled job uses existing GitHub authentication. All executable validation
+The manually invoked script uses existing GitHub authentication. All executable validation
 uses a temporary CODEX_HOME. Conflicts, dirty checkouts, failed CI, and unexpected
 entry points stop the update and leave the installed executable in place.
 """

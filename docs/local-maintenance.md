@@ -1,4 +1,4 @@
-# Local installation and scheduled upstream maintenance
+# Local installation and manual upstream maintenance
 
 The macOS installation uses a native binary built from this fork. The global
 entry point `/opt/homebrew/bin/codex-auth` links to
@@ -19,7 +19,7 @@ The following files are outside both the Git checkout and `~/.codex`:
 - `toolchains/zig-0.16.0/`: persistent build toolchain.
 - `maintenance.json`: local paths for checkout, state, entry point, Zig, and gh.
 - `maintenance-status.json` and `validation.log`: last maintenance result and
-  isolated validation output. launchd stdout/stderr use `maintenance.log`.
+  isolated validation output.
 
 Replacing the executable does not require logging in, importing credentials,
 switching accounts, or restarting native Codex. Existing consumers, including
@@ -27,17 +27,16 @@ Hammerspoon's fixed executable path, use the new binary on their next invocation
 Existing application polling continues according to its configured policy;
 installation validation never invokes the CLI against real account state.
 
-## Daily maintenance
+## Manual maintenance
 
-The user LaunchAgent `cnberg.codex-auth-maintenance` runs daily at **09:00 local
-machine time** (currently Asia/Singapore, UTC+8). macOS runs a missed calendar
-event after waking; the user must be logged in. It executes:
+No LaunchAgent or recurring maintenance task is configured. Run the maintenance
+script explicitly when checking or synchronizing upstream:
 
 ```sh
 /usr/bin/python3 ~/Developer/codex-auth/scripts/maintenance.py run
 ```
 
-The job uses the existing GitHub CLI authentication; it never starts a login or
+The script uses the existing GitHub CLI authentication; it never starts a login or
 refreshes an LLM credential. It does not call Codex or an LLM to maintain source.
 
 1. Take a local nonblocking process lock. Require a clean `main` checkout and
@@ -66,7 +65,7 @@ An interrupted installation can verify and reuse its staged release. Installatio
 metadata is committed before the final executable-pointer change. A failed
 metadata write keeps the old executable active; the active release manifest is
 checked independently of that record when determining installation status.
-The scheduler records status locally and does not send messages or notifications.
+The script records status locally and does not send messages or notifications.
 
 ## Local commands
 
@@ -74,7 +73,6 @@ The scheduler records status locally and does not send messages or notifications
 python3 ~/Developer/codex-auth/scripts/maintenance.py status
 python3 ~/Developer/codex-auth/scripts/maintenance.py check  # fetch and report only
 python3 ~/Developer/codex-auth/scripts/maintenance.py run    # synchronize and install
-launchctl print gui/$(id -u)/cnberg.codex-auth-maintenance
 ```
 
 Configuration is a private JSON file in the installation state directory:
@@ -89,18 +87,12 @@ Configuration is a private JSON file in the installation state directory:
 }
 ```
 
-The LaunchAgent is manually installed at
-`~/Library/LaunchAgents/cnberg.codex-auth-maintenance.plist`; dotfiles `rcup` does
-not manage it. It sets PATH to include Homebrew, runs without `RunAtLoad` or
-`KeepAlive`, and sends stdout/stderr to the state directory. To pause it:
-
-```sh
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/cnberg.codex-auth-maintenance.plist
-```
+Do not install a LaunchAgent for this maintenance script. The local executable
+and its rollback files remain available independently of maintenance invocation.
 
 ## Executable rollback
 
-Pause the LaunchAgent first. Use `installation.json` to select a previously
+Ensure no maintenance invocation is running. Use `installation.json` to select a previously
 validated release and atomically replace `current`, or restore the npm symlink
 stored in `original_entry_target`. Keep the release manifests for provenance.
 Rollback changes program files only. Never restore account snapshots or remove
