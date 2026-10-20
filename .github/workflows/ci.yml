@@ -65,3 +65,7 @@ jobs:
         run: |
           zig build
           python3 tests/oauth_refresh_cli.py zig-out/bin/codex-auth
+
+      - name: Maintenance regressions
+        if: ${{ matrix.os != 'windows-latest' }}
+        run: python3 -m unittest discover -s tests -p maintenance_test.py
