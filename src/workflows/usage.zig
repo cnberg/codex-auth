@@ -422,6 +422,8 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                         error.OutOfMemory => return err,
                         else => {
                             batch_result.error_name = @errorName(err);
+                            batch_result.status_code = null;
+                            batch_result.error_code = null;
                             break :refresh_attempt null;
                         },
                     };
