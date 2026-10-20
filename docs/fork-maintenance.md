@@ -6,6 +6,10 @@ official Codex CLI. The npm package `@loongphy/codex-auth` remains the upstream
 distribution; identify a build of this fork by its Git commit as well as its
 upstream version.
 
+Local executable provenance, daily upstream synchronization, CI gates, and
+rollback are documented in [local-maintenance.md](local-maintenance.md).
+The currently adopted upstream commit is in [upstream-state.json](upstream-state.json).
+
 ## Baseline and patch ownership
 
 - Upstream: <https://github.com/Loongphy/codex-auth> (`upstream` remote).

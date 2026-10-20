@@ -3,6 +3,7 @@ zig-out/
 .zig-cache/
 dist/
 *.tgz
+__pycache__/
 
 # IDE/Editor
 .idea/
