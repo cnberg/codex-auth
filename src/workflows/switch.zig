@@ -246,11 +246,11 @@ fn refreshSwitchTarget(allocator: std.mem.Allocator, codex_home: []const u8, reg
     _ = oauth_refresh.refreshAccount(allocator, codex_home, account_key, is_active, false) catch |err| switch (err) {
         error.RefreshLoginRequired, error.RefreshProtocolFailure => return error.LoginRequired,
         error.MissingRefreshToken, error.MissingTokens => return,
-        error.OutOfMemory => return err,
-        else => {
+        error.RefreshTransient => {
             std.log.warn("OAuth refresh was unavailable; switching anyway so Codex can recover the login: {s}", .{@errorName(err)});
             return;
         },
+        else => return err,
     };
 }
 

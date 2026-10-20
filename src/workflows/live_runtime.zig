@@ -406,8 +406,8 @@ pub fn switchLiveRuntimeApplySelection(
         _ = oauth_refresh.refreshAccount(allocator, runtime.codex_home, account_key, is_active, false) catch |err| switch (err) {
             error.RefreshLoginRequired, error.RefreshProtocolFailure => return error.LoginRequired,
             error.MissingRefreshToken, error.MissingTokens => {},
-            error.OutOfMemory => return err,
-            else => std.log.warn("OAuth refresh was unavailable; switching anyway so Codex can recover the login: {s}", .{@errorName(err)}),
+            error.RefreshTransient => std.log.warn("OAuth refresh was unavailable; switching anyway so Codex can recover the login: {s}", .{@errorName(err)}),
+            else => return err,
         };
     }
     try registry.activateAccountByKey(allocator, runtime.codex_home, &reg, account_key);

@@ -120,6 +120,7 @@ pub fn updateUsage(allocator: std.mem.Allocator, reg: *Registry, account_key: []
 }
 
 pub fn syncActiveAccountFromAuthWithImporter(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry, auto_importer: anytype) !bool {
+    try @import("../auth/oauth_refresh.zig").recoverPendingAccounts(allocator, codex_home, reg);
     if (reg.accounts.items.len == 0) {
         return try auto_importer(allocator, codex_home, reg);
     }
